@@ -17,6 +17,7 @@ from azure.search.documents import SearchClient
 from azure.identity import ManagedIdentityCredential
 from azure.keyvault.secrets import SecretClient
 import azure.functions as func
+import base64
 
 AZURE_SEARCH_SERVICE_ENDPOINT = 'CHANGEME'
 AZURE_SEARCH_INDEX_NAME = 'CHANGEME'
@@ -71,16 +72,48 @@ def simple_text_query(str):
     # TODO get next 1000 if there are 1000 results
     result_dict = dict()
     result_list = []
+    undecoded_list = []
+    pad = ''
     for result in results:
+        file_path = result['metadata_storage_path']
+        path_decoded = file_path
+        while len(pad) < 3:
+            file_path += pad
+            try:
+                path_decoded = base64.b64decode(file_path).decode("utf-8").rstrip()
+                break
+            except Exception:
+                pad += '=' 
+        pad = ''
+
+        if path_decoded == file_path or result['metadata_storage_name'][-4:] != path_decoded[-4:]:
+            file_path = file_path[:-1]
+            while len(pad) < 3:
+                file_path += pad
+                try:
+                    path_decoded = base64.b64decode(file_path).decode("utf-8").rstrip()
+                    break
+                except Exception:
+                    pad += '=' 
+            pad = ''
+
+
+        if path_decoded == file_path:
+            undecoded_list.append(file_path + ';\n')
+
+
+
         metadata_storage_name = result['metadata_storage_name']  + ';'
-        metadata_storage_path = result['metadata_storage_path'] + ';\n'
+        metadata_storage_path = path_decoded + ';\n'
+        
+        
 
         if metadata_storage_path in result_dict:
             continue
         else:
             result_list.append([metadata_storage_name, metadata_storage_path])
             result_dict[metadata_storage_path] = 1
-    return result_list
+    return result_list, undecoded_list
 
 def main(req: func.HttpRequest) -> func.HttpResponse:
     logging.info('Python HTTP trigger function processed a request.')
@@ -99,11 +132,15 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
         
     if term:
         get_secrets()
-        results = simple_text_query(term)
+        results, undecoded = simple_text_query(term)
         if len(results) == 0:
             return func.HttpResponse(f"No results found matching search term")
 
         csv_string = ''
+
+        for item in undecoded:
+            csv_string += item
+
         for pair in results:
             csv_string += pair[0]
             csv_string += pair[1]
