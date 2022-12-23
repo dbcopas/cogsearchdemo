@@ -24,6 +24,8 @@ AZURE_SEARCH_INDEX_NAME = 'CHANGEME'
 AZURE_KEYVAULT_URL = 'CHANGEME'
 AZURE_FUNCTION_FQDN = 'CHANGEME'
 
+PAGE_SIZE = 500
+
 SECRETS = dict()
 
 USE_LOCALHOST = False
@@ -68,51 +70,50 @@ def simple_text_query(str):
     index_name = AZURE_SEARCH_INDEX_NAME
     key = SECRETS['AZURE_SEARCH_API_KEY']
     search_client = SearchClient(service_endpoint, index_name, AzureKeyCredential(key))
-    results = search_client.search(search_text=str, top=1000)
-    # TODO get next 1000 if there are 1000 results
-    result_dict = dict()
-    result_list = []
-    undecoded_list = []
-    pad = ''
-    for result in results:
-        file_path = result['metadata_storage_path']
-        path_decoded = file_path
-        while len(pad) < 3:
-            file_path += pad
+
+    search_done = False
+    skip_from = 0
+
+    while not search_done:
+
+        results = search_client.search(search_text=str, top=PAGE_SIZE, include_total_count=True, skip=skip_from, order_by='search.score() desc')
+
+        if results.get_count() <= skip_from + PAGE_SIZE:
+            search_done = True
+        else:
+            skip_from += PAGE_SIZE
+
+        result_dict = dict()
+        result_list = []
+        undecoded_list = []
+
+        for result in results:
+            file_path = result['metadata_storage_path']
+            path_decoded = file_path
+
+            if file_path[-1] == '0':
+                file_path = file_path[:-1]
+            elif file_path[-1] == '1':
+                file_path = file_path[:-1] + '='
+            elif file_path[-1] == '2':
+                file_path = file_path[:-1] + '=='
+
             try:
                 path_decoded = base64.b64decode(file_path).decode("utf-8").rstrip()
-                break
             except Exception:
-                pad += '=' 
-        pad = ''
+                pass
 
-        if path_decoded == file_path or result['metadata_storage_name'][-4:] != path_decoded[-4:]:
-            file_path = file_path[:-1]
-            while len(pad) < 3:
-                file_path += pad
-                try:
-                    path_decoded = base64.b64decode(file_path).decode("utf-8").rstrip()
-                    break
-                except Exception:
-                    pad += '=' 
-            pad = ''
+            if path_decoded == file_path:
+                undecoded_list.append(file_path + ';\n')
 
-
-        if path_decoded == file_path:
-            undecoded_list.append(file_path + ';\n')
-
-
-
-        metadata_storage_name = result['metadata_storage_name']  + ';'
-        metadata_storage_path = path_decoded + ';\n'
-        
-        
-
-        if metadata_storage_path in result_dict:
-            continue
-        else:
-            result_list.append([metadata_storage_name, metadata_storage_path])
-            result_dict[metadata_storage_path] = 1
+            metadata_storage_name = result['metadata_storage_name']  + ';'
+            metadata_storage_path = path_decoded + ';\n'
+            
+            if metadata_storage_path in result_dict:
+                continue
+            else:
+                result_list.append([metadata_storage_name, metadata_storage_path])
+                result_dict[metadata_storage_path] = 1
     return result_list, undecoded_list
 
 def main(req: func.HttpRequest) -> func.HttpResponse:
@@ -138,12 +139,14 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
 
         csv_string = ''
 
-        for item in undecoded:
-            csv_string += item
-
         for pair in results:
             csv_string += pair[0]
             csv_string += pair[1]
+
+        for item in undecoded:
+            csv_string += 'undecoded;'
+            csv_string += item
+        
         fbytes = bytes(csv_string, 'utf-8')
         headers = {
             "Content-Disposition": "attachment; filename=results.csv"
