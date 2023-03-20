@@ -7,6 +7,8 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE
 
 For Demo use only - not to be used in production
+
+Created by Douglas Copas, Azure Core CSA
 """
 
 import logging
@@ -28,7 +30,7 @@ PAGE_SIZE = 500
 
 SECRETS = dict()
 
-USE_LOCALHOST = False
+USE_LOCALHOST = True
 
 if USE_LOCALHOST:
     REDIRECT_FQDN = 'http://localhost:7071'
@@ -40,8 +42,11 @@ def get_input_form() -> str:
     <html>
     <body>
     <h1>Cognitive Search Simple UI Demo</h1>
-    <h3>by Douglas Copas, Azure Core CSA</h3>
     <h3>Demo use only</h3>
+    <br>    
+    <p>Use + for AND operation. For example, ocean + pool stipulates that a document must contain both terms.</p>
+    <p>Use | for OR operation. For example, ocean | pool finds documents containing either ocean or pool or both. Omitting the | symbol has the same result.</p>
+    <p>Use quotes to search for a phrase. For example "ocean pool" (with the quotation marks) finds documents containing the phrase 'ocean pool'.</p>
     <form action="{REDIRECT_FQDN}/api/cogsearch" method="POST">
         Search term<br>
         <input type="text" name="term">
@@ -57,17 +62,21 @@ def get_secrets():
     if USE_LOCALHOST:
         load_dotenv()
         AZURE_SEARCH_API_KEY = os.getenv("AZURE_SEARCH_API_KEY")  
+        AZURE_SEARCH_SERVICE_ENDPOINT = os.getenv("AZURE_SEARCH_SERVICE_ENDPOINT")
+        AZURE_SEARCH_INDEX_NAME = os.getenv("AZURE_SEARCH_INDEX_NAME")
     else:
         identity = ManagedIdentityCredential()
         secretClient = SecretClient(vault_url=AZURE_KEYVAULT_URL, credential=identity)
         AZURE_SEARCH_API_KEY = secretClient.get_secret('AZURE-SEARCH-API-KEY').value  
     
     SECRETS['AZURE_SEARCH_API_KEY'] = AZURE_SEARCH_API_KEY
+    SECRETS['AZURE_SEARCH_SERVICE_ENDPOINT'] = AZURE_SEARCH_SERVICE_ENDPOINT
+    SECRETS['AZURE_SEARCH_INDEX_NAME'] = AZURE_SEARCH_INDEX_NAME
     return SECRETS
 
 def simple_text_query(str):
-    service_endpoint = AZURE_SEARCH_SERVICE_ENDPOINT
-    index_name = AZURE_SEARCH_INDEX_NAME
+    service_endpoint = SECRETS['AZURE_SEARCH_SERVICE_ENDPOINT']
+    index_name = SECRETS['AZURE_SEARCH_INDEX_NAME']
     key = SECRETS['AZURE_SEARCH_API_KEY']
     search_client = SearchClient(service_endpoint, index_name, AzureKeyCredential(key))
 
@@ -107,12 +116,14 @@ def simple_text_query(str):
                 undecoded_list.append(file_path + ';\n')
 
             metadata_storage_name = result['metadata_storage_name']  + ';'
-            metadata_storage_path = path_decoded + ';\n'
+            metadata_storage_path = path_decoded + ';'
+            metadata_creation_date =  result['metadata_creation_date'] + ';' if result['metadata_creation_date'] is not None else '' + ';'
+            metadata_last_modified = result['metadata_last_modified'] + ';\n' if result['metadata_last_modified'] is not None else '' + ';\n' 
             
             if metadata_storage_path in result_dict:
                 continue
             else:
-                result_list.append([metadata_storage_name, metadata_storage_path])
+                result_list.append([metadata_storage_name, metadata_storage_path, metadata_creation_date, metadata_last_modified])
                 result_dict[metadata_storage_path] = 1
     return result_list, undecoded_list
 
@@ -133,17 +144,19 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
         
     if term:
         get_secrets()
-        results, undecoded = simple_text_query(term)
-        if len(results) == 0:
+        result_list, undecoded_list = simple_text_query(term)
+        if len(result_list) == 0:
             return func.HttpResponse(f"No results found matching search term")
 
         csv_string = ''
 
-        for pair in results:
-            csv_string += pair[0]
-            csv_string += pair[1]
+        for result in result_list:
+            csv_string += result[0]
+            csv_string += result[1]
+            csv_string += result[2]
+            csv_string += result[3]
 
-        for item in undecoded:
+        for item in undecoded_list:
             csv_string += 'undecoded;'
             csv_string += item
         
