@@ -30,7 +30,7 @@ PAGE_SIZE = 500
 
 SECRETS = dict()
 
-USE_LOCALHOST = True
+USE_LOCALHOST = False
 
 if USE_LOCALHOST:
     REDIRECT_FQDN = 'http://localhost:7071'
